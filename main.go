@@ -10,6 +10,7 @@ import (
 // configJSON holds settings parsed from --config flag.
 type configJSON struct {
 	SUPABASE_PROJECT_REF    string `json:"SUPABASE_PROJECT_REF"`
+	SUPABASE_DB_HOST        string `json:"SUPABASE_DB_HOST"`
 	SUPABASE_DB_PASSWORD    string `json:"SUPABASE_DB_PASSWORD"`
 	SUPABASE_DB_PORT        string `json:"SUPABASE_DB_PORT"`
 	SUPABASE_DB_USER        string `json:"SUPABASE_DB_USER"`
@@ -40,6 +41,7 @@ func main() {
 			}
 		}
 		setIfNotEnv("SUPABASE_PROJECT_REF", cfg.SUPABASE_PROJECT_REF)
+		setIfNotEnv("SUPABASE_DB_HOST", cfg.SUPABASE_DB_HOST)
 		setIfNotEnv("SUPABASE_DB_PASSWORD", cfg.SUPABASE_DB_PASSWORD)
 		setIfNotEnv("SUPABASE_DB_PORT", cfg.SUPABASE_DB_PORT)
 		setIfNotEnv("SUPABASE_DB_USER", cfg.SUPABASE_DB_USER)

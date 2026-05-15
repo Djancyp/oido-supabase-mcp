@@ -89,14 +89,20 @@ type SupabaseClient struct {
 
 // NewSupabaseClient creates a new Supabase client from environment variables.
 // Uses sslmode=require as Supabase mandates SSL.
+// Set SUPABASE_DB_HOST to use Session Pooler (IPv4); omit to use direct connection.
 func NewSupabaseClient() (*SupabaseClient, error) {
 	projectRef := os.Getenv("SUPABASE_PROJECT_REF")
 	password := os.Getenv("SUPABASE_DB_PASSWORD")
 	settings := parseSQLFunctionSettings()
 
-	if projectRef == "" {
-		log.Println("Warning: SUPABASE_PROJECT_REF not set. Tools will return errors until configured.")
-		return &SupabaseClient{settings: settings}, nil
+	// SUPABASE_DB_HOST takes priority; otherwise construct direct host from project ref.
+	host := os.Getenv("SUPABASE_DB_HOST")
+	if host == "" {
+		if projectRef == "" {
+			log.Println("Warning: SUPABASE_PROJECT_REF and SUPABASE_DB_HOST not set. Tools will return errors until configured.")
+			return &SupabaseClient{settings: settings}, nil
+		}
+		host = fmt.Sprintf("db.%s.supabase.co", projectRef)
 	}
 
 	port := os.Getenv("SUPABASE_DB_PORT")
@@ -112,7 +118,6 @@ func NewSupabaseClient() (*SupabaseClient, error) {
 		database = "postgres"
 	}
 
-	host := fmt.Sprintf("db.%s.supabase.co", projectRef)
 	connStr := fmt.Sprintf(
 		"host=%s port=%s user=%s dbname=%s sslmode=require",
 		host, port, user, database,
