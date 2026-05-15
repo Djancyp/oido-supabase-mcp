@@ -2,7 +2,7 @@ name = "sql-query"
 description = "Execute a SQL query against the Supabase database."
 
 prompt = """
-Execute the following SQL query against the Supabase database using the execute_sql tool:
+Execute the following SQL query against the Supabase database using the sp_execute_sql tool:
 
 {{query}}
 

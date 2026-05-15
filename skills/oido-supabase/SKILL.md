@@ -11,7 +11,7 @@ The Oido Supabase extension provides tools to query and explore Supabase Postgre
 
 ## Available Tools
 
-### `execute_sql`
+### `sp_execute_sql`
 
 Execute a SQL query against the Supabase database.
 
@@ -28,13 +28,13 @@ Execute a SQL query against the Supabase database.
 **Example Usage:**
 ```
 User: "Show me all active users"
--> Call execute_sql with query: "SELECT * FROM public.users WHERE status = 'active'"
+-> Call sp_execute_sql with query: "SELECT * FROM public.users WHERE status = 'active'"
 
 User: "How many orders were placed last month?"
--> Call execute_sql with query: "SELECT COUNT(*) FROM public.orders WHERE created_at >= ..."
+-> Call sp_execute_sql with query: "SELECT COUNT(*) FROM public.orders WHERE created_at >= ..."
 ```
 
-### `list_tables`
+### `sp_list_tables`
 
 List all tables in the Supabase database.
 
@@ -48,10 +48,10 @@ List all tables in the Supabase database.
 **Example Usage:**
 ```
 User: "What tables do we have?"
--> Call list_tables
+-> Call sp_list_tables
 ```
 
-### `describe_table`
+### `sp_describe_table`
 
 Describe a table's columns, types, and constraints.
 
@@ -67,7 +67,7 @@ Describe a table's columns, types, and constraints.
 **Example Usage:**
 ```
 User: "What columns are in the users table?"
--> Call describe_table with schema: "public", table: "users"
+-> Call sp_describe_table with schema: "public", table: "users"
 ```
 
 ## Best Practices
@@ -76,7 +76,7 @@ User: "What columns are in the users table?"
 2. **Default to public schema**: If schema not specified, use `public`
 3. **Check permissions**: Operations blocked by `SUPABASE_ALLOW_*` flags return a clear error
 4. **Limit results**: Default 100 rows, respect user-specified limits
-5. **Supabase schemas**: Supabase also has `auth` and `storage` schemas — list_tables shows all
+5. **Supabase schemas**: Supabase also has `auth` and `storage` schemas — sp_list_tables shows all
 
 ## Triggers
 

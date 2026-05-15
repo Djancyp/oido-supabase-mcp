@@ -2,7 +2,7 @@ name = "list-tables"
 description = "List all tables in the Supabase database."
 
 prompt = """
-List all tables in the Supabase database using the list_tables tool.
+List all tables in the Supabase database using the sp_list_tables tool.
 Format the results as a clean list of schema.table names.
 """
 

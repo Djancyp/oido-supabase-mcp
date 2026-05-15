@@ -2,7 +2,7 @@ name = "describe-table"
 description = "Describe a Supabase table's columns, types, and constraints."
 
 prompt = """
-Describe the structure of table {{table}} in schema {{schema}} using the describe_table tool.
+Describe the structure of table {{table}} in schema {{schema}} using the sp_describe_table tool.
 Show column names, data types, nullable status, and default values.
 """
 

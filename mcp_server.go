@@ -50,17 +50,17 @@ func RunMCPServer() {
 	}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "execute_sql",
+		Name:        "sp_execute_sql",
 		Description: "Execute a SQL query against the Supabase PostgreSQL database. Permissions are configured via SUPABASE_ALLOW_* environment variables (SELECT only by default).",
 	}, handler.HandleExecuteSQL)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_tables",
+		Name:        "sp_list_tables",
 		Description: "List all tables in the Supabase database. Returns schema.table names.",
 	}, handler.HandleListTables)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "describe_table",
+		Name:        "sp_describe_table",
 		Description: "Describe a table's columns, types, and constraints. Requires schema and table name.",
 	}, handler.HandleDescribeTable)
 
