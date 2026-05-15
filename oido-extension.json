@@ -2,7 +2,7 @@
   "name": "oido-supabase",
   "version": "1.0.0",
   "description": "Execute SQL queries, list tables, and describe Supabase PostgreSQL database schemas via MCP server.",
-  "mcpSerers": {
+  "mcpServers": {
     "oido-supabase": {
       "command": "${extensionPath}/oido-supabase-mcp",
       "args": [],
