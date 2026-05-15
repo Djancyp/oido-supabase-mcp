@@ -1,0 +1,108 @@
+{
+  "name": "oido-supabase",
+  "version": "1.0.0",
+  "description": "Execute SQL queries, list tables, and describe Supabase PostgreSQL database schemas via MCP server.",
+  "mcpSerers": {
+    "oido-supabase": {
+      "command": "${extensionPath}/oido-supabase-mcp",
+      "args": [],
+      "env": {
+        "SUPABASE_PROJECT_REF": "${SUPABASE_PROJECT_REF}",
+        "SUPABASE_DB_PASSWORD": "${SUPABASE_DB_PASSWORD}",
+        "SUPABASE_DB_PORT": "${SUPABASE_DB_PORT}",
+        "SUPABASE_DB_USER": "${SUPABASE_DB_USER}",
+        "SUPABASE_DB_DATABASE": "${SUPABASE_DB_DATABASE}",
+        "SUPABASE_ALLOW_SELECT": "${SUPABASE_ALLOW_SELECT}",
+        "SUPABASE_ALLOW_INSERT": "${SUPABASE_ALLOW_INSERT}",
+        "SUPABASE_ALLOW_UPDATE": "${SUPABASE_ALLOW_UPDATE}",
+        "SUPABASE_ALLOW_DELETE": "${SUPABASE_ALLOW_DELETE}",
+        "SUPABASE_ALLOW_CREATE": "${SUPABASE_ALLOW_CREATE}",
+        "SUPABASE_ALLOW_ALTER": "${SUPABASE_ALLOW_ALTER}",
+        "SUPABASE_ALLOW_DROP": "${SUPABASE_ALLOW_DROP}",
+        "SUPABASE_ALLOW_TRUNCATE": "${SUPABASE_ALLOW_TRUNCATE}"
+      }
+    }
+  },
+  "contextFileName": "OIDO.md",
+  "excludeTools": [],
+  "settings": [
+    {
+      "name": "SUPABASE_PROJECT_REF",
+      "description": "Supabase project reference ID (found in project URL: db.<ref>.supabase.co)",
+      "defaultValue": "",
+      "type": "string"
+    },
+    {
+      "name": "SUPABASE_DB_PASSWORD",
+      "description": "Supabase database password",
+      "defaultValue": "",
+      "type": "string"
+    },
+    {
+      "name": "SUPABASE_DB_PORT",
+      "description": "Database port: 5432 (direct) or 6543 (connection pooler)",
+      "defaultValue": "5432",
+      "type": "string"
+    },
+    {
+      "name": "SUPABASE_DB_USER",
+      "description": "Database user",
+      "defaultValue": "postgres",
+      "type": "string"
+    },
+    {
+      "name": "SUPABASE_DB_DATABASE",
+      "description": "Database name",
+      "defaultValue": "postgres",
+      "type": "string"
+    },
+    {
+      "name": "SUPABASE_ALLOW_SELECT",
+      "description": "Allow SELECT queries",
+      "defaultValue": "true",
+      "type": "bool"
+    },
+    {
+      "name": "SUPABASE_ALLOW_INSERT",
+      "description": "Allow INSERT statements",
+      "defaultValue": "false",
+      "type": "bool"
+    },
+    {
+      "name": "SUPABASE_ALLOW_UPDATE",
+      "description": "Allow UPDATE statements",
+      "defaultValue": "false",
+      "type": "bool"
+    },
+    {
+      "name": "SUPABASE_ALLOW_DELETE",
+      "description": "Allow DELETE statements",
+      "defaultValue": "false",
+      "type": "bool"
+    },
+    {
+      "name": "SUPABASE_ALLOW_CREATE",
+      "description": "Allow CREATE statements",
+      "defaultValue": "false",
+      "type": "bool"
+    },
+    {
+      "name": "SUPABASE_ALLOW_ALTER",
+      "description": "Allow ALTER statements",
+      "defaultValue": "false",
+      "type": "bool"
+    },
+    {
+      "name": "SUPABASE_ALLOW_DROP",
+      "description": "Allow DROP statements",
+      "defaultValue": "false",
+      "type": "bool"
+    },
+    {
+      "name": "SUPABASE_ALLOW_TRUNCATE",
+      "description": "Allow TRUNCATE statements",
+      "defaultValue": "false",
+      "type": "bool"
+    }
+  ]
+}

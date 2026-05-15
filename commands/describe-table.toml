@@ -1,0 +1,11 @@
+name = "describe-table"
+description = "Describe a Supabase table's columns, types, and constraints."
+
+prompt = """
+Describe the structure of table {{table}} in schema {{schema}} using the describe_table tool.
+Show column names, data types, nullable status, and default values.
+"""
+
+[parameters]
+schema = { type = "string", description = "Database schema name (default: public)", default = "public" }
+table = { type = "string", description = "Table name to describe", required = true }

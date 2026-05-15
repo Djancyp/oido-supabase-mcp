@@ -1,0 +1,14 @@
+name = "sql-query"
+description = "Execute a SQL query against the Supabase database."
+
+prompt = """
+Execute the following SQL query against the Supabase database using the execute_sql tool:
+
+{{query}}
+
+Return at most {{limit}} rows. Format results as a table with column headers.
+"""
+
+[parameters]
+query = { type = "string", description = "SQL query to execute", required = true }
+limit = { type = "number", description = "Maximum rows to return (default: 100)", default = 100 }
