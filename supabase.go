@@ -118,6 +118,12 @@ func NewSupabaseClient() (*SupabaseClient, error) {
 		database = "postgres"
 	}
 
+	// Supabase shared pooler (*.pooler.supabase.com) requires the project ref
+	// appended to the username: postgres.{project_ref}
+	if strings.Contains(host, ".pooler.supabase.com") && projectRef != "" && !strings.Contains(user, ".") {
+		user = fmt.Sprintf("%s.%s", user, projectRef)
+	}
+
 	connStr := fmt.Sprintf(
 		"host=%s port=%s user=%s dbname=%s sslmode=require",
 		host, port, user, database,
