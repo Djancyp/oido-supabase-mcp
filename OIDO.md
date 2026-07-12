@@ -37,24 +37,61 @@ Describe a table's columns, types, and constraints.
 - User wants to analyze Supabase database structure
 - User asks for data analysis or reporting
 
+## Connection
+
+Connects over the **PostgREST REST API** using the **service_role key** — just a
+URL and a secret, no direct Postgres connection. Raw SQL runs through a one-time
+`exec_sql` RPC function you create in the database.
+
+### One-time setup: create the `exec_sql` function
+
+Run this once (Studio SQL editor, or `psql`):
+
+```sql
+create or replace function public.exec_sql(query text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  result jsonb;
+begin
+  -- Row-returning statements: aggregate rows into a JSON array.
+  execute format('select coalesce(jsonb_agg(row_to_json(t)), ''[]''::jsonb) from (%s) t', query)
+    into result;
+  return result;
+exception
+  when others then
+    -- Non-SELECT statements can't sit in a subquery; run them directly.
+    execute query;
+    return jsonb_build_object('status', 'ok');
+end;
+$$;
+
+-- Only the service_role should reach it.
+revoke all on function public.exec_sql(text) from public, anon, authenticated;
+grant execute on function public.exec_sql(text) to service_role;
+```
+
+Security note: this runs arbitrary SQL as a privileged role. It is only callable
+with the service_role key, which already bypasses RLS — keep that key private.
+Use `SUPABASE_ALLOW_*` to restrict which statement types the tools will send.
+
 ## Notes
 
-- **SSL required**: Always connects with `sslmode=require` (Supabase mandates it)
 - **Configurable permissions**: Each SQL operation (SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, TRUNCATE) individually toggled via `SUPABASE_ALLOW_*` env vars
 - **Default read-only**: Only SELECT enabled by default
-- **Port options**: `5432` for direct connection, `6543` for connection pooler (PgBouncer)
 - **Row limits**: Default 100 rows for SELECT queries
-- **Connection pooling**: 10 max open, 5 idle, 5 min lifetime
+- **HTTP timeout**: 30s per request
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SUPABASE_PROJECT_REF` | *(required)* | Project ref from Supabase dashboard |
-| `SUPABASE_DB_PASSWORD` | *(required)* | Database password |
-| `SUPABASE_DB_PORT` | `5432` | `5432` direct or `6543` pooler |
-| `SUPABASE_DB_USER` | `postgres` | Database user |
-| `SUPABASE_DB_DATABASE` | `postgres` | Database name |
+| `SUPABASE_URL` | *(required)* | API URL, e.g. `https://host` or `http://host:8000` |
+| `SUPABASE_SERVICE_ROLE_KEY` | *(required)* | service_role secret (bypasses RLS — keep private) |
+| `SUPABASE_EXEC_SQL_FN` | `exec_sql` | Name of the SQL-executing RPC function |
 | `SUPABASE_ALLOW_SELECT` | `true` | Allow SELECT |
 | `SUPABASE_ALLOW_INSERT` | `false` | Allow INSERT |
 | `SUPABASE_ALLOW_UPDATE` | `false` | Allow UPDATE |
