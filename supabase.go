@@ -1,16 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	_ "github.com/lib/pq"
 )
 
 // SQLFunctionSettings holds configuration for which SQL operations are allowed.
@@ -80,106 +81,136 @@ func parseSQLFunctionSettings() *SQLFunctionSettings {
 	return settings
 }
 
-// SupabaseClient manages Supabase PostgreSQL connections and queries.
+// SupabaseClient talks to Supabase over the PostgREST REST API using the
+// service_role key. Raw SQL is run through the exec_sql RPC (see OIDO.md for
+// the one-time function to create).
 type SupabaseClient struct {
-	connStr  string
-	db       *sql.DB
+	baseURL  string // e.g. https://host or http://host:8000, no trailing slash
+	key      string // service_role secret
+	rpc      string // RPC function name, default "exec_sql"
+	http     *http.Client
 	settings *SQLFunctionSettings
 }
 
-// NewSupabaseClient creates a new Supabase client from environment variables.
-// Uses sslmode=require as Supabase mandates SSL.
-// Set SUPABASE_DB_HOST to use Session Pooler (IPv4); omit to use direct connection.
+// NewSupabaseClient creates a REST-backed Supabase client from environment vars.
+// Requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.
 func NewSupabaseClient() (*SupabaseClient, error) {
-	projectRef := os.Getenv("SUPABASE_PROJECT_REF")
-	password := os.Getenv("SUPABASE_DB_PASSWORD")
 	settings := parseSQLFunctionSettings()
 
-	// SUPABASE_DB_HOST takes priority; otherwise construct direct host from project ref.
-	host := os.Getenv("SUPABASE_DB_HOST")
-	if host == "" {
-		if projectRef == "" {
-			log.Println("Warning: SUPABASE_PROJECT_REF and SUPABASE_DB_HOST not set. Tools will return errors until configured.")
-			return &SupabaseClient{settings: settings}, nil
-		}
-		host = fmt.Sprintf("db.%s.supabase.co", projectRef)
+	url := strings.TrimRight(os.Getenv("SUPABASE_URL"), "/")
+	key := os.Getenv("SUPABASE_SERVICE_ROLE_KEY")
+	if url == "" || key == "" {
+		log.Println("Warning: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set. Tools will return errors until configured.")
+		return &SupabaseClient{settings: settings}, nil
 	}
 
-	port := os.Getenv("SUPABASE_DB_PORT")
-	if port == "" {
-		port = "5432"
-	}
-	user := os.Getenv("SUPABASE_DB_USER")
-	if user == "" {
-		user = "postgres"
-	}
-	database := os.Getenv("SUPABASE_DB_DATABASE")
-	if database == "" {
-		database = "postgres"
+	rpc := os.Getenv("SUPABASE_EXEC_SQL_FN")
+	if rpc == "" {
+		rpc = "exec_sql"
 	}
 
-	// Supabase shared pooler (*.pooler.supabase.com) requires the project ref
-	// appended to the username: postgres.{project_ref}
-	if strings.Contains(host, ".pooler.supabase.com") && projectRef != "" && !strings.Contains(user, ".") {
-		user = fmt.Sprintf("%s.%s", user, projectRef)
-	}
-
-	connStr := fmt.Sprintf(
-		"host=%s port=%s user=%s dbname=%s sslmode=require",
-		host, port, user, database,
-	)
-	if password != "" {
-		connStr += fmt.Sprintf(" password=%s", password)
-	}
-
-	return &SupabaseClient{connStr: connStr, settings: settings}, nil
+	return &SupabaseClient{
+		baseURL:  url,
+		key:      key,
+		rpc:      rpc,
+		http:     &http.Client{Timeout: 30 * time.Second},
+		settings: settings,
+	}, nil
 }
 
-// ensureConnected opens the DB connection on first use. Safe to call multiple times.
-func (c *SupabaseClient) ensureConnected() error {
-	if c.db != nil {
-		return nil
+// Close is a no-op for the REST client (kept for interface compatibility).
+func (c *SupabaseClient) Close() error { return nil }
+
+// runSQL POSTs a query to the exec_sql RPC and returns the decoded JSON.
+// The RPC returns a JSON array of rows for row-returning statements, or a
+// status object for others.
+func (c *SupabaseClient) runSQL(ctx context.Context, query string) (json.RawMessage, error) {
+	if c.baseURL == "" || c.key == "" {
+		return nil, fmt.Errorf("Supabase not configured: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
 	}
-	if c.connStr == "" {
-		return fmt.Errorf("Supabase DB not configured: set SUPABASE_PROJECT_REF and SUPABASE_DB_PASSWORD")
-	}
-	db, err := sql.Open("postgres", c.connStr)
+
+	body, _ := json.Marshal(map[string]string{"query": query})
+	endpoint := fmt.Sprintf("%s/rest/v1/rpc/%s", c.baseURL, c.rpc)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return nil, err
 	}
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return fmt.Errorf("failed to connect to Supabase: %w", err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("apikey", c.key)
+	req.Header.Set("Authorization", "Bearer "+c.key)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	c.db = db
-	return nil
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == 404 {
+			return nil, fmt.Errorf("exec_sql RPC not found (HTTP 404) — create the %s function (see OIDO.md). Body: %s", c.rpc, strings.TrimSpace(string(data)))
+		}
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return json.RawMessage(data), nil
 }
 
-// Close closes the database connection.
-func (c *SupabaseClient) Close() error {
-	if c.db != nil {
-		return c.db.Close()
+// formatRows renders a JSON array of row objects as a text table.
+func formatRows(raw json.RawMessage) (string, error) {
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		// Not an array of rows (e.g. status object); return raw JSON.
+		return strings.TrimSpace(string(raw)), nil
 	}
-	return nil
+	if len(rows) == 0 {
+		return "Query executed successfully. 0 rows.", nil
+	}
+
+	// Stable column order from the first row.
+	var columns []string
+	for k := range rows[0] {
+		columns = append(columns, k)
+	}
+	// ponytail: map iteration is unordered; sort so output is deterministic.
+	sortStrings(columns)
+
+	var b strings.Builder
+	header := strings.Join(columns, " | ")
+	b.WriteString(header + "\n")
+	b.WriteString(strings.Repeat("-", len(header)) + "\n")
+	for _, row := range rows {
+		vals := make([]string, len(columns))
+		for i, col := range columns {
+			v := row[col]
+			if v == nil {
+				vals[i] = "NULL"
+			} else {
+				vals[i] = fmt.Sprintf("%v", v)
+			}
+		}
+		b.WriteString(strings.Join(vals, " | ") + "\n")
+	}
+	b.WriteString(fmt.Sprintf("\nTotal rows: %d", len(rows)))
+	return b.String(), nil
 }
 
-// ExecuteSQL executes a raw SQL query and returns results as a formatted string.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
+}
+
+// ExecuteSQL runs a SQL query via the exec_sql RPC, subject to SUPABASE_ALLOW_* gating.
 func (c *SupabaseClient) ExecuteSQL(ctx context.Context, query string, limit int) (string, error) {
-	if err := c.ensureConnected(); err != nil {
-		return "", err
-	}
-
 	upperQuery := strings.ToUpper(strings.TrimSpace(query))
 
-	type sqlOperation struct {
+	operations := []struct {
 		prefix  string
 		allowed bool
-	}
-
-	operations := []sqlOperation{
+	}{
 		{"SELECT", c.settings.AllowSelect},
 		{"INSERT", c.settings.AllowInsert},
 		{"UPDATE", c.settings.AllowUpdate},
@@ -189,7 +220,6 @@ func (c *SupabaseClient) ExecuteSQL(ctx context.Context, query string, limit int
 		{"DROP", c.settings.AllowDrop},
 		{"TRUNCATE", c.settings.AllowTruncate},
 	}
-
 	for _, op := range operations {
 		if strings.HasPrefix(upperQuery, op.prefix) {
 			if !op.allowed {
@@ -207,136 +237,76 @@ func (c *SupabaseClient) ExecuteSQL(ctx context.Context, query string, limit int
 		query = fmt.Sprintf("%s LIMIT %d", query, limit)
 	}
 
-	rows, err := c.db.QueryContext(ctx, query)
+	raw, err := c.runSQL(ctx, query)
 	if err != nil {
-		return "", fmt.Errorf("query execution failed: %w", err)
-	}
-	defer rows.Close()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		return "", fmt.Errorf("failed to get columns: %w", err)
-	}
-
-	if len(columns) == 0 {
-		return "Query executed successfully. No columns returned.", nil
-	}
-
-	var result strings.Builder
-	result.WriteString(fmt.Sprintf("Query returned %d columns\n\n", len(columns)))
-
-	header := strings.Join(columns, " | ")
-	result.WriteString(header + "\n")
-	result.WriteString(strings.Repeat("-", len(header)) + "\n")
-
-	rowCount := 0
-	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range values {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return result.String(), fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		rowVals := make([]string, len(columns))
-		for i, v := range values {
-			if v == nil {
-				rowVals[i] = "NULL"
-			} else {
-				rowVals[i] = fmt.Sprintf("%v", v)
-			}
-		}
-
-		result.WriteString(strings.Join(rowVals, " | ") + "\n")
-		rowCount++
-	}
-
-	result.WriteString(fmt.Sprintf("\nTotal rows: %d", rowCount))
-	return result.String(), nil
-}
-
-// ListTables returns all tables in the current database.
-func (c *SupabaseClient) ListTables(ctx context.Context) (string, error) {
-	if err := c.ensureConnected(); err != nil {
 		return "", err
 	}
-	query := `
-		SELECT schemaname, tablename
+	return formatRows(raw)
+}
+
+// ListTables returns all user tables in the database.
+func (c *SupabaseClient) ListTables(ctx context.Context) (string, error) {
+	query := `SELECT schemaname || '.' || tablename AS name
 		FROM pg_catalog.pg_tables
 		WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
-		ORDER BY schemaname, tablename;
-	`
+		ORDER BY schemaname, tablename`
 
-	rows, err := c.db.QueryContext(ctx, query)
+	raw, err := c.runSQL(ctx, query)
 	if err != nil {
-		return "", fmt.Errorf("failed to list tables: %w", err)
+		return "", err
 	}
-	defer rows.Close()
-
-	var tables []string
-	for rows.Next() {
-		var schema, table string
-		if err := rows.Scan(&schema, &table); err != nil {
-			return "", fmt.Errorf("failed to scan table: %w", err)
-		}
-		tables = append(tables, fmt.Sprintf("%s.%s", schema, table))
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return "", fmt.Errorf("unexpected response: %s", strings.TrimSpace(string(raw)))
 	}
-
-	if len(tables) == 0 {
+	if len(rows) == 0 {
 		return "No tables found in the database.", nil
 	}
-
-	return fmt.Sprintf("Tables (%d):\n\n%s", len(tables), strings.Join(tables, "\n")), nil
+	names := make([]string, len(rows))
+	for i, r := range rows {
+		names[i] = fmt.Sprintf("%v", r["name"])
+	}
+	return fmt.Sprintf("Tables (%d):\n\n%s", len(names), strings.Join(names, "\n")), nil
 }
 
 // DescribeTable returns column info for a table.
 func (c *SupabaseClient) DescribeTable(ctx context.Context, schema, table string) (string, error) {
-	if err := c.ensureConnected(); err != nil {
+	// ponytail: schema/table interpolated into SQL run server-side under the
+	// service_role via exec_sql. Values come from the caller's own MCP request,
+	// not untrusted input; quote to avoid breakage on odd names.
+	query := fmt.Sprintf(`SELECT column_name, data_type, is_nullable, column_default
+		FROM information_schema.columns
+		WHERE table_schema = %s AND table_name = %s
+		ORDER BY ordinal_position`, quoteLiteral(schema), quoteLiteral(table))
+
+	raw, err := c.runSQL(ctx, query)
+	if err != nil {
 		return "", err
 	}
-	query := `
-		SELECT column_name, data_type, is_nullable, column_default
-		FROM information_schema.columns
-		WHERE table_schema = $1 AND table_name = $2
-		ORDER BY ordinal_position;
-	`
-
-	rows, err := c.db.QueryContext(ctx, query, schema, table)
-	if err != nil {
-		return "", fmt.Errorf("failed to describe table: %w", err)
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return "", fmt.Errorf("unexpected response: %s", strings.TrimSpace(string(raw)))
 	}
-	defer rows.Close()
-
-	var result strings.Builder
-	result.WriteString(fmt.Sprintf("Table: %s.%s\n\n", schema, table))
-	result.WriteString("Column Name          | Data Type            | Nullable | Default\n")
-	result.WriteString(strings.Repeat("-", 80) + "\n")
-
-	count := 0
-	for rows.Next() {
-		var colName, dataType, isNullable string
-		var defaultVal sql.NullString
-
-		if err := rows.Scan(&colName, &dataType, &isNullable, &defaultVal); err != nil {
-			return "", fmt.Errorf("failed to scan column: %w", err)
-		}
-
-		defaultStr := "NULL"
-		if defaultVal.Valid {
-			defaultStr = defaultVal.String
-		}
-
-		result.WriteString(fmt.Sprintf("%-20s | %-20s | %-10s | %s\n",
-			colName, dataType, isNullable, defaultStr))
-		count++
-	}
-
-	if count == 0 {
+	if len(rows) == 0 {
 		return fmt.Sprintf("Table %s.%s not found or has no columns.", schema, table), nil
 	}
 
-	return result.String(), nil
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Table: %s.%s\n\n", schema, table))
+	b.WriteString("Column Name          | Data Type            | Nullable | Default\n")
+	b.WriteString(strings.Repeat("-", 80) + "\n")
+	for _, r := range rows {
+		def := "NULL"
+		if r["column_default"] != nil {
+			def = fmt.Sprintf("%v", r["column_default"])
+		}
+		b.WriteString(fmt.Sprintf("%-20v | %-20v | %-10v | %v\n",
+			r["column_name"], r["data_type"], r["is_nullable"], def))
+	}
+	return b.String(), nil
+}
+
+// quoteLiteral wraps a value as a single-quoted SQL string literal.
+func quoteLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }

@@ -8,12 +8,9 @@
       "command": "${extensionPath}/oido-supabase-mcp",
       "args": [],
       "env": {
-        "SUPABASE_PROJECT_REF": "${SUPABASE_PROJECT_REF}",
-        "SUPABASE_DB_HOST": "${SUPABASE_DB_HOST}",
-        "SUPABASE_DB_PASSWORD": "${SUPABASE_DB_PASSWORD}",
-        "SUPABASE_DB_PORT": "${SUPABASE_DB_PORT}",
-        "SUPABASE_DB_USER": "${SUPABASE_DB_USER}",
-        "SUPABASE_DB_DATABASE": "${SUPABASE_DB_DATABASE}",
+        "SUPABASE_URL": "${SUPABASE_URL}",
+        "SUPABASE_SERVICE_ROLE_KEY": "${SUPABASE_SERVICE_ROLE_KEY}",
+        "SUPABASE_EXEC_SQL_FN": "${SUPABASE_EXEC_SQL_FN}",
         "SUPABASE_ALLOW_SELECT": "${SUPABASE_ALLOW_SELECT}",
         "SUPABASE_ALLOW_INSERT": "${SUPABASE_ALLOW_INSERT}",
         "SUPABASE_ALLOW_UPDATE": "${SUPABASE_ALLOW_UPDATE}",
@@ -29,39 +26,21 @@
   "excludeTools": [],
   "settings": [
     {
-      "name": "SUPABASE_PROJECT_REF",
-      "description": "Supabase project reference ID (found in project URL: db.<ref>.supabase.co). Not needed if SUPABASE_DB_HOST is set.",
+      "name": "SUPABASE_URL",
+      "description": "Supabase API URL, e.g. https://your-host or http://your-host:8000 (the Kong gateway).",
       "defaultValue": "",
       "type": "string"
     },
     {
-      "name": "SUPABASE_DB_HOST",
-      "description": "Override database host. Use Session Pooler host for IPv4 networks (e.g. aws-1-eu-central-1.pooler.supabase.com). Leave empty to use direct connection via SUPABASE_PROJECT_REF.",
+      "name": "SUPABASE_SERVICE_ROLE_KEY",
+      "description": "service_role secret. Bypasses RLS — keep it private.",
       "defaultValue": "",
       "type": "string"
     },
     {
-      "name": "SUPABASE_DB_PASSWORD",
-      "description": "Supabase database password",
-      "defaultValue": "",
-      "type": "string"
-    },
-    {
-      "name": "SUPABASE_DB_PORT",
-      "description": "Database port: 5432 (direct) or 6543 (connection pooler)",
-      "defaultValue": "5432",
-      "type": "string"
-    },
-    {
-      "name": "SUPABASE_DB_USER",
-      "description": "Database user",
-      "defaultValue": "postgres",
-      "type": "string"
-    },
-    {
-      "name": "SUPABASE_DB_DATABASE",
-      "description": "Database name",
-      "defaultValue": "postgres",
+      "name": "SUPABASE_EXEC_SQL_FN",
+      "description": "Name of the SQL-executing RPC function (see OIDO.md). Default: exec_sql.",
+      "defaultValue": "exec_sql",
       "type": "string"
     },
     {

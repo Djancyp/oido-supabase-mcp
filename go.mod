@@ -2,10 +2,7 @@ module github.com/Djancyp/oido-studio/plugins/oido-supabase
 
 go 1.26.1
 
-require (
-	github.com/lib/pq v1.10.9
-	github.com/modelcontextprotocol/go-sdk v1.4.1
-)
+require github.com/modelcontextprotocol/go-sdk v1.4.1
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
