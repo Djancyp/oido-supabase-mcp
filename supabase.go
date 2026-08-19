@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -124,12 +125,18 @@ func (c *SupabaseClient) Close() error { return nil }
 // runSQL POSTs a query to the exec_sql RPC and returns the decoded JSON.
 // The RPC returns a JSON array of rows for row-returning statements, or a
 // status object for others.
-func (c *SupabaseClient) runSQL(ctx context.Context, query string) (json.RawMessage, error) {
+//
+// readOnly is the actual write barrier. There is no client-side transaction to
+// open over REST, so the function sets transaction_read_only for the statement
+// instead; a deployed function that predates the read_only parameter cannot
+// enforce anything, so this fails closed rather than silently running without
+// the barrier.
+func (c *SupabaseClient) runSQL(ctx context.Context, query string, readOnly bool) (json.RawMessage, error) {
 	if c.baseURL == "" || c.key == "" {
 		return nil, fmt.Errorf("Supabase not configured: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
 	}
 
-	body, _ := json.Marshal(map[string]string{"query": query})
+	body, _ := json.Marshal(map[string]any{"query": query, "read_only": readOnly})
 	endpoint := fmt.Sprintf("%s/rest/v1/rpc/%s", c.baseURL, c.rpc)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -149,7 +156,8 @@ func (c *SupabaseClient) runSQL(ctx context.Context, query string) (json.RawMess
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == 404 {
-			return nil, fmt.Errorf("exec_sql RPC not found (HTTP 404) — create the %s function (see OIDO.md). Body: %s", c.rpc, strings.TrimSpace(string(data)))
+			return nil, fmt.Errorf("exec_sql RPC not found (HTTP 404) — the %s function is missing, or is the older single-argument version that cannot enforce read-only. Re-run the function definition in OIDO.md, which takes (query text, read_only boolean). Body: %s",
+				c.rpc, strings.TrimSpace(string(data)))
 		}
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
@@ -203,41 +211,86 @@ func sortStrings(s []string) {
 	}
 }
 
-// ExecuteSQL runs a SQL query via the exec_sql RPC, subject to SUPABASE_ALLOW_* gating.
-func (c *SupabaseClient) ExecuteSQL(ctx context.Context, query string, limit int) (string, error) {
-	upperQuery := strings.ToUpper(strings.TrimSpace(query))
+// writesEnabled reports whether any write operation is permitted. When nothing
+// is, every statement runs with transaction_read_only set and the database
+// enforces it for us.
+func (s *SQLFunctionSettings) writesEnabled() bool {
+	return s.AllowInsert || s.AllowUpdate || s.AllowDelete ||
+		s.AllowCreate || s.AllowAlter || s.AllowDrop || s.AllowTruncate
+}
 
+// limitClause matches a row cap already present at the end of the query, so a
+// LIMIT inside a subquery does not stop us capping the outer result.
+var limitClause = regexp.MustCompile(`(?is)\bLIMIT\s+\d+\s*(OFFSET\s+\d+\s*)?$`)
+
+// prepareQuery trims the statement and appends a row cap to an uncapped SELECT.
+// The trailing semicolon has to go first: a model emits "SELECT 1;" by default,
+// and pasting " LIMIT 100" after it is a syntax error.
+func prepareQuery(query string, limit int, s *SQLFunctionSettings) string {
+	q := strings.TrimRight(strings.TrimSpace(query), "; \t\n\r")
+	if !s.AllowSelect || !strings.HasPrefix(strings.ToUpper(q), "SELECT") {
+		return q
+	}
+	if limitClause.MatchString(q) {
+		return q
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	return fmt.Sprintf("%s LIMIT %d", q, limit)
+}
+
+// checkAdvisory rejects a disallowed operation early so the caller gets a
+// message naming the setting to flip.
+//
+// It is NOT the security boundary and must never be treated as one: it matches
+// the statement's leading keyword, so "WITH gone AS (DELETE ...) SELECT" matches
+// nothing here and sails through. Enforcement is the read_only flag passed to
+// the RPC, which the server applies to CTEs and every other shape alike.
+func (s *SQLFunctionSettings) checkAdvisory(query string) error {
+	upper := strings.ToUpper(strings.TrimSpace(query))
 	operations := []struct {
 		prefix  string
 		allowed bool
 	}{
-		{"SELECT", c.settings.AllowSelect},
-		{"INSERT", c.settings.AllowInsert},
-		{"UPDATE", c.settings.AllowUpdate},
-		{"DELETE", c.settings.AllowDelete},
-		{"CREATE", c.settings.AllowCreate},
-		{"ALTER", c.settings.AllowAlter},
-		{"DROP", c.settings.AllowDrop},
-		{"TRUNCATE", c.settings.AllowTruncate},
+		{"SELECT", s.AllowSelect},
+		{"INSERT", s.AllowInsert},
+		{"UPDATE", s.AllowUpdate},
+		{"DELETE", s.AllowDelete},
+		{"CREATE", s.AllowCreate},
+		{"ALTER", s.AllowAlter},
+		{"DROP", s.AllowDrop},
+		{"TRUNCATE", s.AllowTruncate},
 	}
 	for _, op := range operations {
-		if strings.HasPrefix(upperQuery, op.prefix) {
-			if !op.allowed {
-				return "", fmt.Errorf("blocked: %s operations are not allowed (enable with SUPABASE_ALLOW_%s=true)",
-					op.prefix, op.prefix)
-			}
-			break
+		if strings.HasPrefix(upper, op.prefix) && !op.allowed {
+			return fmt.Errorf("blocked: %s operations are not allowed (enable with SUPABASE_ALLOW_%s=true)",
+				op.prefix, op.prefix)
 		}
 	}
+	return nil
+}
 
-	if strings.HasPrefix(upperQuery, "SELECT") && c.settings.AllowSelect && !strings.Contains(upperQuery, "LIMIT") {
-		if limit <= 0 {
-			limit = 100
-		}
-		query = fmt.Sprintf("%s LIMIT %d", query, limit)
+// ExecuteSQL runs a single SQL statement via the exec_sql RPC.
+//
+// Gating is the read_only argument sent to the function, not the keyword check
+// below. Inspecting the query string cannot work: exec_sql wraps the statement
+// in "select ... from (query) t", a top-level data-modifying CTE cannot sit in a
+// subquery, and the function's exception handler then runs the statement raw —
+// so "WITH gone AS (DELETE ...) SELECT" reached the table no matter what the
+// keyword check said. With transaction_read_only set, that fallback path fails
+// at the server like every other write.
+//
+// Per-verb permissions (INSERT yes, DROP no) cannot be expressed this way. Once
+// any write is enabled only checkAdvisory stands between the model and the other
+// write verbs, so scope the key or the function's role to what it should reach.
+func (c *SupabaseClient) ExecuteSQL(ctx context.Context, query string, limit int) (string, error) {
+	query = prepareQuery(query, limit, c.settings)
+	if err := c.settings.checkAdvisory(query); err != nil {
+		return "", err
 	}
 
-	raw, err := c.runSQL(ctx, query)
+	raw, err := c.runSQL(ctx, query, !c.settings.writesEnabled())
 	if err != nil {
 		return "", err
 	}
@@ -251,7 +304,7 @@ func (c *SupabaseClient) ListTables(ctx context.Context) (string, error) {
 		WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
 		ORDER BY schemaname, tablename`
 
-	raw, err := c.runSQL(ctx, query)
+	raw, err := c.runSQL(ctx, query, true) // introspection only
 	if err != nil {
 		return "", err
 	}
@@ -279,7 +332,7 @@ func (c *SupabaseClient) DescribeTable(ctx context.Context, schema, table string
 		WHERE table_schema = %s AND table_name = %s
 		ORDER BY ordinal_position`, quoteLiteral(schema), quoteLiteral(table))
 
-	raw, err := c.runSQL(ctx, query)
+	raw, err := c.runSQL(ctx, query, true) // introspection only
 	if err != nil {
 		return "", err
 	}
