@@ -48,7 +48,10 @@ URL and a secret, no direct Postgres connection. Raw SQL runs through a one-time
 Run this once (Studio SQL editor, or `psql`):
 
 ```sql
-create or replace function public.exec_sql(query text)
+-- Drop the older single-argument version so nothing can call the unguarded one.
+drop function if exists public.exec_sql(text);
+
+create or replace function public.exec_sql(query text, read_only boolean default true)
 returns jsonb
 language plpgsql
 security definer
@@ -57,21 +60,38 @@ as $$
 declare
   result jsonb;
 begin
-  -- Row-returning statements: aggregate rows into a JSON array.
-  execute format('select coalesce(jsonb_agg(row_to_json(t)), ''[]''::jsonb) from (%s) t', query)
-    into result;
-  return result;
-exception
-  when others then
-    -- Non-SELECT statements can't sit in a subquery; run them directly.
-    execute query;
-    return jsonb_build_object('status', 'ok');
+  -- The write barrier, and it must be set HERE, in a block with no exception
+  -- handler of its own. SET LOCAL is transactional: entering a plpgsql handler
+  -- rolls its block's subtransaction back, and a barrier set in that same block
+  -- is rolled back with it -- which is how a data-modifying CTE reached the
+  -- table even with read_only on. The inner block below owns the handler; this
+  -- outer one owns the barrier, so the fallback execute stays covered.
+  if read_only then
+    set local transaction_read_only = on;
+  end if;
+
+  begin
+    -- Row-returning statements: aggregate rows into a JSON array.
+    execute format('select coalesce(jsonb_agg(row_to_json(t)), ''[]''::jsonb) from (%s) t', query)
+      into result;
+    return result;
+  exception
+    -- A read-only violation is the answer, not a reason to try the query
+    -- another way. Re-raise instead of falling through to the direct execute.
+    when read_only_sql_transaction then
+      raise;
+    when others then
+      -- Non-SELECT statements can't sit in a subquery; run them directly. Still
+      -- inside the read-only barrier when one was requested.
+      execute query;
+      return jsonb_build_object('status', 'ok');
+  end;
 end;
 $$;
 
 -- Only the service_role should reach it.
-revoke all on function public.exec_sql(text) from public, anon, authenticated;
-grant execute on function public.exec_sql(text) to service_role;
+revoke all on function public.exec_sql(text, boolean) from public, anon, authenticated;
+grant execute on function public.exec_sql(text, boolean) to service_role;
 ```
 
 Security note: this runs arbitrary SQL as a privileged role. It is only callable
