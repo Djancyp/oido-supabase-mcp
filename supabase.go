@@ -240,6 +240,28 @@ func prepareQuery(query string, limit int, s *SQLFunctionSettings) string {
 	return fmt.Sprintf("%s LIMIT %d", q, limit)
 }
 
+// rejectMultiStatement blocks a second statement smuggled in after the first.
+// Without this, a query like "SET LOCAL transaction_read_only = off; DROP
+// TABLE t" fails the row-wrapped attempt (a SET can't sit in a subquery),
+// falls into exec_sql's "when others" fallback, and runs as a plain
+// multi-statement EXECUTE -- which flips the read-only barrier off from
+// inside the same call it was meant to guard. read_only is set per-call, not
+// per-statement, so a second statement runs under whatever the first one left
+// it as.
+//
+// ponytail: naive semicolon scan, so a semicolon inside a string literal
+// (e.g. SELECT 'a;b') false-positives as multi-statement. Reject-on-doubt is
+// the right tradeoff for a security barrier; switch to a real SQL statement
+// splitter if that false positive becomes a real complaint.
+func rejectMultiStatement(query string) error {
+	trimmed := strings.TrimRight(strings.TrimSpace(query), "; \t\n\r")
+	if strings.Contains(trimmed, ";") {
+		return fmt.Errorf("blocked: multiple statements in one query are not allowed " +
+			"(found a ';' before the end) -- send one statement per call")
+	}
+	return nil
+}
+
 // checkAdvisory rejects a disallowed operation early so the caller gets a
 // message naming the setting to flip.
 //
@@ -284,8 +306,18 @@ func (s *SQLFunctionSettings) checkAdvisory(query string) error {
 // Per-verb permissions (INSERT yes, DROP no) cannot be expressed this way. Once
 // any write is enabled only checkAdvisory stands between the model and the other
 // write verbs, so scope the key or the function's role to what it should reach.
+//
+// rejectMultiStatement runs before any of that: exec_sql's read_only barrier is
+// per-call, not per-statement, so a query smuggling in a second statement (e.g.
+// "SET LOCAL transaction_read_only = off; DROP TABLE t") could flip it off from
+// inside the same call meant to be guarded by it. The RPC enforces this too
+// (defense in depth for anyone bypassing this client); rejecting here just gives
+// a clearer error without a round trip.
 func (c *SupabaseClient) ExecuteSQL(ctx context.Context, query string, limit int) (string, error) {
 	query = prepareQuery(query, limit, c.settings)
+	if err := rejectMultiStatement(query); err != nil {
+		return "", err
+	}
 	if err := c.settings.checkAdvisory(query); err != nil {
 		return "", err
 	}

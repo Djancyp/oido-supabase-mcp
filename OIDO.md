@@ -60,6 +60,20 @@ as $$
 declare
   result jsonb;
 begin
+  -- read_only is a per-call barrier, not per-statement. A second statement
+  -- smuggled in after a ';' (e.g. "SET LOCAL transaction_read_only = off;
+  -- DROP TABLE t") fails the row-wrapped attempt below and falls into the
+  -- "when others" fallback, which EXECUTEs the raw string -- and EXECUTE runs
+  -- a ';'-separated string as multiple statements, so the SET would flip the
+  -- barrier off before the DROP runs. Refuse outright instead of trying to
+  -- out-guess what a second statement could do.
+  --
+  -- ponytail: naive scan, so a ';' inside a string literal false-positives.
+  -- Reject-on-doubt is correct for a security barrier.
+  if regexp_replace(query, '\s*;\s*$', '') ~ ';' then
+    raise exception 'exec_sql: multiple statements in one query are not allowed';
+  end if;
+
   -- The write barrier, and it must be set HERE, in a block with no exception
   -- handler of its own. SET LOCAL is transactional: entering a plpgsql handler
   -- rolls its block's subtransaction back, and a barrier set in that same block
@@ -97,6 +111,13 @@ grant execute on function public.exec_sql(text, boolean) to service_role;
 Security note: this runs arbitrary SQL as a privileged role. It is only callable
 with the service_role key, which already bypasses RLS — keep that key private.
 Use `SUPABASE_ALLOW_*` to restrict which statement types the tools will send.
+
+`SUPABASE_ALLOW_*` is per-verb but the actual barrier (`read_only`) is not: once
+*any* write flag is on, `read_only` is off for every call, and a CTE like
+`WITH x AS (DROP TABLE t) SELECT 1` reaches a verb you didn't enable (the
+leading-keyword check only sees `WITH`). If you need e.g. INSERT without DROP,
+enforce that with a scoped Postgres role or a restricted service key, not with
+`SUPABASE_ALLOW_*` alone.
 
 ## Notes
 

@@ -96,6 +96,28 @@ func TestPrepareQuery(t *testing.T) {
 	}
 }
 
+func TestRejectMultiStatement(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		wantErr bool
+	}{
+		{"single statement", "SELECT 1", false},
+		{"single statement with trailing semicolon", "SELECT 1;", false},
+		{"single statement, trailing semicolon and space", "SELECT 1 ;  ", false},
+		{"smuggled SET before a write", "SET LOCAL transaction_read_only = off; DROP TABLE t", true},
+		{"two selects", "SELECT 1; SELECT 2", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := rejectMultiStatement(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("rejectMultiStatement(%q) error = %v, wantErr %v", tt.in, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // checkAdvisory is a message-quality helper, not a boundary. This pins that it
 // still catches the obvious case — and documents that it does NOT catch the CTE,
 // which is exactly why the read_only flag exists.
